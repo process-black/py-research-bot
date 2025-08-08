@@ -3,6 +3,7 @@
 import os
 from src.bots.base_bot import BaseBot
 from src.utils.openai_client import OpenAIClient
+from src.utils.airtable_client import AirtableClient
 from src.utils.pdf_helpers import download_pdf_from_slack, extract_text_from_pdf, cleanup_temp_file
 from src.utils import colored_logs as llog
 
@@ -11,9 +12,10 @@ class PDFSummarizerBot(BaseBot):
     """Bot that summarizes PDF files using OpenAI and stores results."""
     
     def __init__(self, slack_client=None):
-        """Initialize with OpenAI client."""
+        """Initialize with OpenAI and Airtable clients."""
         super().__init__(slack_client)
         self.openai_client = OpenAIClient()
+        self.airtable_client = AirtableClient()
         self.bot_token = os.environ.get("SLACK_BOT_TOKEN")
     
     def process_file(self, file_info, channel_id, thread_ts=None):
@@ -33,21 +35,40 @@ class PDFSummarizerBot(BaseBot):
                 self.send_error_to_channel(channel_id, "Failed to download PDF file")
                 return
             
-            # Step 2: Send PDF to OpenAI for summarization
-            llog.yellow("🤖 Processing with OpenAI...")
-            analysis_result = self.analyze_pdf_with_openai(temp_file_path)
+            # Step 2: Extract structured metadata from PDF
+            llog.yellow("🤖 Extracting PDF metadata...")
+            metadata_result = self.openai_client.extract_pdf_metadata(temp_file_path, file_name)
             
-            # Step 3: Log the OpenAI response for debugging
-            llog.green("🎉 OpenAI Response:")
-            llog.blue(analysis_result)
+            # Step 3: Log the metadata extraction result (excluding large data)
+            llog.green("📊 Metadata Extraction Result:")
+            # Create a safe version for logging (exclude large binary data)
+            safe_result = {k: v for k, v in metadata_result.items() if k != "metadata" or not isinstance(v, dict) or len(str(v)) < 1000}
+            if metadata_result.get("metadata") and len(str(metadata_result["metadata"])) >= 1000:
+                safe_result["metadata"] = "[Large metadata object - suppressed from logs]"
+            llog.blue(safe_result)
             llog.divider()
             
-            if analysis_result["success"]:
-                # Step 4: Send results to Slack
-                self.send_summary_to_channel(channel_id, file_name, analysis_result, thread_ts=thread_ts)
-                llog.green(f"✅ PDF processing completed successfully: {file_name}")
+            if metadata_result["success"]:
+                metadata = metadata_result["metadata"]
+                
+                # Step 4: Save to Airtable
+                try:
+                    llog.yellow("🗃️ Saving to Airtable...")
+                    airtable_record = self.save_pdf_to_airtable(metadata, temp_file_path)
+                    
+                    llog.green(f"✅ Saved to Airtable: {airtable_record['id']}")
+                    
+                    # Step 5: Send results to Slack
+                    self.send_metadata_to_channel(channel_id, file_name, metadata, airtable_record, thread_ts=thread_ts)
+                    llog.green(f"✅ PDF processing completed successfully: {file_name}")
+                    
+                except Exception as airtable_error:
+                    llog.red(f"❌ Airtable save failed: {str(airtable_error)}")
+                    # Still send to Slack even if Airtable fails
+                    self.send_metadata_to_channel(channel_id, file_name, metadata, None, thread_ts=thread_ts)
+                    
             else:
-                self.send_error_to_channel(channel_id, f"OpenAI analysis failed: {analysis_result.get('error', 'Unknown error')}", thread_ts=thread_ts)
+                self.send_error_to_channel(channel_id, f"Metadata extraction failed: {metadata_result.get('error', 'Unknown error')}", thread_ts=thread_ts)
                 
         except Exception as e:
             llog.red(f"❌ PDF processing failed: {str(e)}")
@@ -57,6 +78,105 @@ class PDFSummarizerBot(BaseBot):
             # Step 6: Always cleanup temp file
             if temp_file_path:
                 cleanup_temp_file(temp_file_path)
+    
+    def save_pdf_to_airtable(self, metadata: dict, pdf_file_path: str) -> dict:
+        """
+        Save PDF metadata and file to Airtable with PDF-specific field mapping.
+        
+        Args:
+            metadata: Extracted PDF metadata
+            pdf_file_path: Path to PDF file
+            
+        Returns:
+            dict: Created Airtable record
+        """
+        base_id = os.environ.get("AIRTABLE_AI_TEACHING_AND_LEARNING_BASE")
+        if not base_id:
+            raise ValueError("AIRTABLE_AI_TEACHING_AND_LEARNING_BASE environment variable not set")
+        
+        # PDF-specific field mapping (without file attachment)
+        fields = {
+            "Title": metadata["title"],
+            "Topic": self.validate_topic(metadata["topic"]), 
+            "StudyType": self.validate_study_type(metadata["study_type"]),
+            "Summary": metadata["summary"]
+        }
+        
+        # Add optional fields
+        if metadata.get("year"):
+            fields["Year"] = metadata["year"]
+        if metadata.get("link"):
+            fields["Link"] = metadata["link"]
+        
+        # Create the record first (without file attachment)
+        record = self.airtable_client.create_record(base_id, "PDFs", fields)
+        
+        # Then upload PDF file as attachment to the created record
+        if pdf_file_path and os.path.exists(pdf_file_path):
+            llog.yellow(f"📎 Uploading PDF file: {os.path.basename(pdf_file_path)}")
+            try:
+                updated_record = self.airtable_client.upload_attachment_to_record(
+                    base_id, "PDFs", record["id"], "File", pdf_file_path
+                )
+                return updated_record
+            except Exception as e:
+                llog.yellow(f"⚠️ Record created but file upload failed: {str(e)}")
+                # Return the record even if file upload fails
+                return record
+        
+        return record
+    
+    def validate_topic(self, topic: str) -> str:
+        """Validate and normalize topic value for PDF records."""
+        valid_topics = [
+            "Learning outcomes",
+            "Tool development", 
+            "Professional practice",
+            "Student perspectives",
+            "User experience and interaction",
+            "Theoretical background",
+            "AI literacy",
+            "Other"
+        ]
+        
+        # Try exact match first
+        if topic in valid_topics:
+            return topic
+            
+        # Try case-insensitive match
+        topic_lower = topic.lower()
+        for valid_topic in valid_topics:
+            if topic_lower == valid_topic.lower():
+                return valid_topic
+                
+        # Default to "Other" if no match
+        llog.yellow(f"⚠️ Unknown topic '{topic}', defaulting to 'Other'")
+        return "Other"
+    
+    def validate_study_type(self, study_type: str) -> str:
+        """Validate and normalize study type value for PDF records."""
+        valid_types = [
+            "Review",
+            "Experimental", 
+            "Quantitative",
+            "Qualitative",
+            "Mixed-methods",
+            "Observational"
+        ]
+        
+        # Try exact match first
+        if study_type in valid_types:
+            return study_type
+            
+        # Try case-insensitive match
+        type_lower = study_type.lower()
+        for valid_type in valid_types:
+            if type_lower == valid_type.lower():
+                return valid_type
+                
+        # Default to "Review" if no match
+        llog.yellow(f"⚠️ Unknown study type '{study_type}', defaulting to 'Review'")
+        return "Review"
     
     def analyze_pdf_with_openai(self, pdf_file_path):
         """
@@ -174,29 +294,117 @@ Please analyze this PDF document and provide a structured summary:
                 "response": None
             }
     
-    def send_summary_to_channel(self, channel_id, file_name, analysis_result, thread_ts=None):
-        """Send formatted summary to Slack channel as a thread reply."""
-        summary_text = analysis_result["response"]
-        model_used = analysis_result.get("model", "Unknown")
+    def send_metadata_to_channel(self, channel_id, file_name, metadata, airtable_record=None, thread_ts=None):
+        """Send formatted metadata and summary to Slack channel as a thread reply using Block Kit."""
         
-        message = f"""📄 **PDF Summary Complete: {file_name}**
-
-{summary_text}
-
----
-*Analysis by OpenAI {model_used}*"""
+        # Build structured blocks for better formatting
+        base_id = os.environ.get("AIRTABLE_AI_TEACHING_AND_LEARNING_BASE")
         
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"📄 PDF Analysis Complete: {file_name}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*📋 METADATA EXTRACTED:*"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn", 
+                        "text": f"*Title:*\n{metadata['title']}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Year:*\n{metadata.get('year', 'N/A')}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Topic:*\n{metadata['topic']}"
+                    },
+                    {
+                        "type": "mrkdwn", 
+                        "text": f"*Study Type:*\n{metadata['study_type']}"
+                    }
+                ]
+            }
+        ]
+        
+        # Add link field if available
+        if metadata.get('link') and metadata['link'] != 'N/A':
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*🔗 Link:* {metadata['link']}"
+                }
+            })
+        
+        # Add summary section
+        blocks.extend([
+            {
+                "type": "divider"
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn", 
+                    "text": f"*📝 SUMMARY:*\n{metadata['summary']}"
+                }
+            },
+            {
+                "type": "divider"
+            }
+        ])
+        
+        # Add footer with attribution and optional Airtable button
+        footer_block = {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "🤖 Analyzed by OpenAI • 🗃️ Saved to Airtable"
+            }
+        }
+        
+        # Add Airtable button if record exists
+        if airtable_record and base_id:
+            footer_block["accessory"] = {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "View in Airtable"
+                },
+                "url": f"https://airtable.com/{base_id}/{airtable_record['id']}",
+                "style": "primary"
+            }
+        
+        blocks.append(footer_block)
+        
+        # Send the message with blocks
         if thread_ts:
             # Reply in thread
             self.slack_client.chat_postMessage(
                 channel=channel_id,
-                text=message,
+                blocks=blocks,
+                text=f"PDF Analysis Complete: {file_name}",  # Fallback text for notifications
                 thread_ts=thread_ts
             )
-            llog.green(f"📝 Summary posted as thread reply")
+            llog.green(f"📝 Metadata and summary posted as thread reply with blocks")
         else:
             # Fallback to regular message
-            self.send_to_channel(channel_id, message)
+            self.slack_client.chat_postMessage(
+                channel=channel_id,
+                blocks=blocks,
+                text=f"PDF Analysis Complete: {file_name}"
+            )
     
     def send_error_to_channel(self, channel_id, error_message, thread_ts=None):
         """Send error message to Slack channel."""

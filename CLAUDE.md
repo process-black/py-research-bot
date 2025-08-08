@@ -67,8 +67,16 @@ heroku ps:scale web=1
 
 ## OpenAI Integration
 
-### Using Responses API (Modern Approach)
-We use OpenAI's Responses API for PDF analysis, not the older Assistants API.
+### CRITICAL: ONLY Use Responses API
+**⚠️ NEVER use Chat Completions API (`chat.completions.create`) in this project.**
+
+We use OpenAI's **Responses API EXCLUSIVELY** for all OpenAI interactions:
+- ✅ PDF file processing
+- ✅ Structured outputs with Pydantic models  
+- ✅ GPT-5, GPT-4o, GPT-4o-mini support
+- ✅ File uploads and references
+
+**Once set up with Responses API, NEVER switch back to Completions API.**
 
 ```python
 # Upload file
@@ -77,29 +85,77 @@ file_upload = client.files.create(
     purpose='user_data'
 )
 
-# Use Responses API with file variable
-response = client.responses.create(
-    model="gpt-4o-mini",
-    prompt={
-        "id": "pdf_analysis_prompt",
-        "variables": {
-            "document": {
-                "type": "input_file",
-                "file_id": file_upload.id,
-            },
-            "template": "Analysis template here..."
-        },
-        "content": "Analyze the document according to template."
-    }
+# Use Responses API with structured output
+response = client.responses.parse(
+    model="gpt-5",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "file_id": file_upload.id
+                },
+                {
+                    "type": "input_text",
+                    "text": "Extract structured metadata from this PDF..."
+                }
+            ]
+        }
+    ],
+    text_format=PDFMetadata  # Pydantic model for structured output
 )
 
-# Get result and cleanup
-summary = response.output_text
+# Get structured result and cleanup
+metadata = response.output_parsed  # Direct access to Pydantic model
 client.files.delete(file_upload.id)
 ```
 
-**Benefits:**
-- Single API call (no polling/waiting)
-- Direct file variables in prompts
-- Automatic cleanup
-- Simpler than Assistants API
+**Why Responses API Only:**
+- PDF file support with GPT-5
+- Structured outputs work correctly
+- Consistent API across all models
+- No mixing of incompatible APIs
+
+## Architecture Guidelines
+
+### Utils Directory (`src/utils/`)
+**Purpose**: Contains only abstract, reusable utilities that could be used in ANY Python project.
+
+**Rules:**
+- ❌ **NO project-specific logic** - utils should never "feel" specific to this Slack bot
+- ❌ **NO business rules** - no PDF-specific validation, no Slack-specific formatting
+- ❌ **NO domain knowledge** - no knowledge of "PDFs", "research papers", "Slack channels"
+- ✅ **Generic operations only** - database clients, API wrappers, file helpers, logging
+- ✅ **Reusable across projects** - should work in a web app, CLI tool, or different bot
+
+**Examples:**
+```python
+# ✅ GOOD - Generic Airtable client
+class AirtableClient:
+    def create_record(self, base_id, table_name, fields):
+        # Pure CRUD operation
+
+# ❌ BAD - PDF-specific in utils
+class AirtableClient:
+    def save_pdf_metadata(self, title, topic, study_type):
+        # This belongs in a bot, not utils
+```
+
+### Handlers Directory (`src/handlers/`)
+**Purpose**: Abstract Slack event routing and message processing.
+
+**Contains:**
+- Event listeners (`@app.event`, `@app.message`)
+- Routing logic (which bot handles what)
+- Slack-specific utilities (thread detection, channel management)
+- Generic message formatting
+
+### Bots Directory (`src/bots/`)
+**Purpose**: All business logic and domain-specific operations.
+
+**Contains:**
+- Feature-specific workflows (PDF processing, research analysis)
+- Domain validation (valid topics, study types)
+- Business rules and logic
+- Integration orchestration (OpenAI + Airtable + Slack)
