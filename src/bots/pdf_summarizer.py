@@ -103,34 +103,65 @@ Please analyze this PDF document and provide a structured summary:
 - **Related Topics**: [What other areas does this connect to?]
             """
             
-            # Use the Responses API with file input
-            response = self.openai_client.client.responses.create(
-                model="gpt-4o-mini",
-                input=[
-                    {
-                        "role": "user",
-                        "content": [
+            # Try GPT-5 first, fallback to GPT-4o if needed
+            models_to_try = ["gpt-5", "gpt-4o", "gpt-4o-mini"]
+            response = None
+            model_used = None
+            
+            for model in models_to_try:
+                try:
+                    llog.yellow(f"🎯 Trying model: {model}")
+                    
+                    # Create client with timeout for this request
+                    from openai import OpenAI
+                    timeout_client = OpenAI(
+                        api_key=self.openai_client.client.api_key,
+                        timeout=180.0  # 3 minute timeout
+                    )
+                    
+                    response = timeout_client.responses.create(
+                        model=model,
+                        input=[
                             {
-                                "type": "input_file",
-                                "file_id": file_upload.id,
-                            },
-                            {
-                                "type": "input_text",
-                                "text": summary_prompt,
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_file",
+                                        "file_id": file_upload.id,
+                                    },
+                                    {
+                                        "type": "input_text",
+                                        "text": summary_prompt,
+                                    }
+                                ]
                             }
                         ]
-                    }
-                ]
-            )
+                    )
+                    
+                    model_used = model
+                    llog.green(f"✅ Success with {model}")
+                    break
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    llog.yellow(f"❌ {model} failed: {error_msg}")
+                    
+                    # Skip to GPT-4o-mini if GPT-5 is not available
+                    if "does not exist" in error_msg.lower() or "not found" in error_msg.lower():
+                        llog.yellow(f"⏭️ {model} not available, skipping to next model")
+                    
+                    if model == models_to_try[-1]:  # Last model
+                        raise e
+                    continue
             
-            # Cleanup uploaded file
+            # Cleanup uploaded file if we want
             self.openai_client.client.files.delete(file_upload.id)
             llog.gray(f"🗑️ Cleaned up uploaded file: {file_upload.id}")
             
             return {
                 "success": True,
                 "response": response.output_text,
-                "model": "gpt-4o-mini",
+                "model": model_used,
                 "file_id": file_upload.id,
                 "response_id": response.id
             }

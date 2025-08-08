@@ -85,3 +85,8 @@ def register_event_handlers(app):
     def handle_file_share_message(event):
         """Handle file share message events (ignored - handled by file_shared)."""
         llog.gray("💬 File share message (ignored - handled by file_shared event)")
+    
+    @app.event({"type": "message", "subtype": "channel_join"})
+    def handle_channel_join_message(event):
+        """Handle channel join message events (ignored)."""
+        llog.gray("👋 Channel join message (ignored)")
