@@ -16,9 +16,24 @@ pip install -r requirements.txt
 ```
 
 3. **Configure environment:**
+Create a `.env` file in the project root with the following variables:
 ```bash
-cp .env.example .env
-# Edit .env with your actual Slack tokens
+# Slack Configuration
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_BOT_USER_TOKEN=xoxp-your-user-token
+SLACK_APP_TOKEN=xapp-your-app-token
+SLACK_SIGNING_SECRET=your-signing-secret
+
+# Slack Channels (Hardcoded for now--do something more impressive as you build this out)
+SLACK_LOGGING_CHANNEL=your-logging-channel-id
+SLACK_ACADEMIC_ARTICLES_CHANNEL=your-articles-channel-id
+
+# OpenAI Configuration
+OPENAI_API_KEY=sk-proj-your-openai-key
+
+# Airtable Configuration
+AIRTABLE_API_TOKEN=pat-your-airtable-token
+AIRTABLE_AI_TEACHING_AND_LEARNING_BASE=app-your-base-id
 ```
 
 4. **Run the bot:**
@@ -40,8 +55,23 @@ python3 app.py
 
 ## Environment Variables
 
+### Required for Development
+All variables must be configured in your `.env` file:
+
+**Slack Configuration:**
 - `SLACK_BOT_TOKEN` - Your bot's OAuth token (starts with `xoxb-`)
+- `SLACK_BOT_USER_TOKEN` - Your user OAuth token (starts with `xoxp-`)
 - `SLACK_APP_TOKEN` - Your app-level token for Socket Mode (starts with `xapp-`)
+- `SLACK_SIGNING_SECRET` - Your app's signing secret for request verification
+
+**Slack Channels:**
+- `SLACK_LOGGING_CHANNEL` - Channel ID for logging messages
+- `SLACK_ACADEMIC_ARTICLES_CHANNEL` - Channel ID for academic article processing
+
+**External APIs:**
+- `OPENAI_API_KEY` - OpenAI API key for GPT models (starts with `sk-proj-`)
+- `AIRTABLE_API_TOKEN` - Airtable personal access token (starts with `pat`)
+- `AIRTABLE_AI_TEACHING_AND_LEARNING_BASE` - Airtable base ID (starts with `app`)
 
 ## Features
 
