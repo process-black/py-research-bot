@@ -90,3 +90,68 @@ def register_event_handlers(app):
     def handle_channel_join_message(event):
         """Handle channel join message events (ignored)."""
         llog.gray("👋 Channel join message (ignored)")
+    
+    @app.event("reaction_added")
+    def handle_reaction_added(event, client):
+        """Handle emoji reactions - trigger PDF processing on books emoji."""
+        try:
+            reaction = event.get("reaction", "")
+            user = event.get("user", "")
+            channel = event.get("item", {}).get("channel")
+            timestamp = event.get("item", {}).get("ts")
+            
+            llog.cyan(f"🎭 REACTION ADDED: {reaction} by user {user}")
+            
+            # Only process books emoji reactions
+            if reaction != "books":
+                llog.gray(f"⏭️ Ignoring non-books reaction: {reaction}")
+                return
+            
+            llog.green(f"📚 Books emoji detected! Processing message in {channel} at {timestamp}")
+            
+            # Get the original message to check for PDFs
+            try:
+                message_response = client.conversations_history(
+                    channel=channel,
+                    latest=timestamp,
+                    limit=1,
+                    inclusive=True
+                )
+                
+                messages = message_response.get("messages", [])
+                if not messages:
+                    llog.yellow("⚠️ Could not retrieve original message")
+                    return
+                
+                original_message = messages[0]
+                llog.blue(f"📝 Original message: {original_message}")
+                
+                # Check if message has PDF files
+                files = original_message.get("files", [])
+                pdf_files = []
+                
+                for file_data in files:
+                    file_name = file_data.get("name", "")
+                    mimetype = file_data.get("mimetype", "")
+                    
+                    if mimetype == "application/pdf" or file_name.lower().endswith(".pdf"):
+                        pdf_files.append(file_data)
+                        llog.green(f"🔍 Found PDF in reacted message: {file_name}")
+                
+                # Process each PDF file
+                if pdf_files:
+                    pdf_bot = PDFSummarizerBot(slack_client=client)
+                    
+                    for file_data in pdf_files:
+                        llog.magenta(f"🔄 Processing PDF from books reaction: {file_data.get('name', 'Unknown')}")
+                        # Use the original message timestamp as thread_ts to reply in thread
+                        pdf_bot.process_file(file_data, channel, thread_ts=timestamp)
+                else:
+                    llog.yellow("📚 Books reaction added but no PDF files found in message")
+                    
+            except Exception as e:
+                llog.red(f"❌ Error retrieving message for reaction: {str(e)}")
+                
+        except Exception as e:
+            llog.red(f"❌ Error handling reaction_added event: {str(e)}")
+            llog.blue(f"Event data: {event}")

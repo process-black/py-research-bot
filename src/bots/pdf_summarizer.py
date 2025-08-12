@@ -5,6 +5,7 @@ from src.bots.base_bot import BaseBot
 from src.utils.openai_client import OpenAIClient
 from src.utils.airtable_client import AirtableClient
 from src.utils.pdf_helpers import download_pdf_from_slack, extract_text_from_pdf, cleanup_temp_file
+from src.utils.text_utils import chunk_text_at_line_breaks
 from src.utils import colored_logs as llog
 
 
@@ -153,6 +154,7 @@ class PDFSummarizerBot(BaseBot):
         llog.yellow(f"⚠️ Unknown topic '{topic}', defaulting to 'Other'")
         return "Other"
     
+
     def validate_study_type(self, study_type: str) -> str:
         """Validate and normalize study type value for PDF records."""
         valid_types = [
@@ -348,43 +350,49 @@ Please analyze this PDF document and provide a structured summary:
                 }
             })
         
-        # Add summary section
-        blocks.extend([
-            {
-                "type": "divider"
-            },
-            {
+        # Add summary section with chunking for long summaries
+        summary_text = f"*📝 SUMMARY:*\n{metadata['summary']}"
+        summary_chunks = chunk_text_at_line_breaks(summary_text, max_length=2800)
+        
+        blocks.append({"type": "divider"})
+        
+        for i, chunk in enumerate(summary_chunks):
+            # For continuation chunks, don't repeat the "SUMMARY:" header
+            if i > 0:
+                chunk = chunk.lstrip()  # Remove leading whitespace
+                if not chunk:
+                    continue
+                    
+            blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn", 
-                    "text": f"*📝 SUMMARY:*\n{metadata['summary']}"
+                    "text": chunk
                 }
-            },
-            {
-                "type": "divider"
-            }
-        ])
+            })
         
-        # Add footer with attribution and optional Airtable button
+        blocks.append({"type": "divider"})
+        
+        # Add footer with attribution and Airtable link
+        footer_text = "🤖 Analyzed by OpenAI • 🗃️ Saved to Airtable"
+        
+        # Add inline Airtable link if record exists
+        if airtable_record and base_id:
+            # Get table and view IDs from environment
+            table_id = os.environ.get("AIRTABLE_PDFS_TABLE_ID", "tblbtIWkj4w8yiIuQ")
+            view_id = os.environ.get("AIRTABLE_PDFS_VIEW_ID", "viwX7m65gHoOAs7ei")
+            
+            # Use proper Airtable URL structure: base/table/view/record?blocks=hide
+            airtable_url = f"https://airtable.com/{base_id}/{table_id}/{view_id}/{airtable_record['id']}?blocks=hide"
+            footer_text = f"🤖 Analyzed by OpenAI • 🗃️ <{airtable_url}|View in Airtable>"
+        
         footer_block = {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "🤖 Analyzed by OpenAI • 🗃️ Saved to Airtable"
+                "text": footer_text
             }
         }
-        
-        # Add Airtable button if record exists
-        if airtable_record and base_id:
-            footer_block["accessory"] = {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "View in Airtable"
-                },
-                "url": f"https://airtable.com/{base_id}/{airtable_record['id']}",
-                "style": "primary"
-            }
         
         blocks.append(footer_block)
         

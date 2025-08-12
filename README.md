@@ -34,6 +34,8 @@ OPENAI_API_KEY=sk-proj-your-openai-key
 # Airtable Configuration
 AIRTABLE_API_TOKEN=pat-your-airtable-token
 AIRTABLE_AI_TEACHING_AND_LEARNING_BASE=app-your-base-id
+AIRTABLE_PDFS_TABLE_ID=tbl-your-table-id
+AIRTABLE_PDFS_VIEW_ID=viw-your-view-id
 ```
 
 4. **Run the bot:**
@@ -49,6 +51,8 @@ python3 app.py
    - `app_mentions:read`
    - `channels:history`
    - `im:history`
+   - `reactions:read`
+   - `files:read`
 3. Enable Socket Mode under "Socket Mode"
 4. Create an App-Level Token with `connections:write` scope
 5. Install the app to your workspace
@@ -72,6 +76,14 @@ All variables must be configured in your `.env` file:
 - `OPENAI_API_KEY` - OpenAI API key for GPT models (starts with `sk-proj-`)
 - `AIRTABLE_API_TOKEN` - Airtable personal access token (starts with `pat`)
 - `AIRTABLE_AI_TEACHING_AND_LEARNING_BASE` - Airtable base ID (starts with `app`)
+- `AIRTABLE_PDFS_TABLE_ID` - Airtable table ID for PDFs table (starts with `tbl`)
+- `AIRTABLE_PDFS_VIEW_ID` - Airtable view ID for default view (starts with `viw`)
+
+**⚠️ Production Note:** The above environment variables are hardcoded for development purposes only. In production environments serving multiple Slack workspaces, implement a more robust configuration system such as:
+- Database-driven configuration per workspace
+- Dynamic table/view discovery via Airtable API
+- Workspace-specific environment variable patterns
+- Configuration management services (AWS Systems Manager, Azure Key Vault, etc.)
 
 ## Features
 
