@@ -21,10 +21,12 @@ def register_message_handlers(app):
         """Route messages to appropriate bots based on content."""
         text = message.get('text', '').lower().strip()
         user_id = message.get('user')
+        channel_type = message.get('channel_type', '')
         
-        # Skip app mentions - they're handled by the app_mention event handler
-        if text.startswith('<@u099dps5s4t>'):  # Your bot's user ID
-            llog.gray("→ Skipping app mention (handled by app_mention event)")
+        # Only handle direct messages (DMs) and not channel messages
+        # Channel messages should only be handled via explicit mentions (app_mention event)
+        if channel_type != 'im':
+            llog.gray("→ Skipping channel message (only handle DMs here)")
             return
         
         # Debug: Log the full message payload for non-mentions
